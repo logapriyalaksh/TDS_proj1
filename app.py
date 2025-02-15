@@ -1,0 +1,552 @@
+# /// srcipt
+# requires-python = ">=3.12"
+# dependencies = [
+#       "fastapi", 
+#       "uvicorn", 
+#       "requests"
+# ]
+# ///
+
+
+from urllib import response
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import requests
+import os
+import subprocess
+import json
+from datetime import datetime
+import sqlite3
+import base64
+import re
+import httpx
+import numpy as np
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+def install_uv():
+    subprocess.run(["pip", "install", "uv"])
+
+def run_script(script_url, email):
+    #install_uv()
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(app_dir)
+    command = f"uv run {script_url} {email}"
+    subprocess.run(command, shell=True)
+
+def format_file(file_path):
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(app_dir)
+    subprocess.run(["npx", "prettier@3.4.2", "--write", file_path])
+
+def parse_date(date_str):
+    for fmt in ("%b %d, %Y", "%d-%b-%Y", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S"):
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"time data '{date_str}' does not match any known format")
+
+def count_wednesdays(file_path, output_path):
+    with open(file_path, "r") as f:
+        dates = f.readlines()
+    wednesdays = sum(1 for date in dates if parse_date(date.strip()).weekday() == 2)
+    with open(output_path, "w") as f:
+        f.write(str(wednesdays))
+
+def sort_contacts(input_path, output_path):
+    with open(input_path, "r") as f:
+        contacts = json.load(f)
+    sorted_contacts = sorted(contacts, key=lambda x: (x["last_name"], x["first_name"]))
+    with open(output_path, "w") as f:
+        json.dump(sorted_contacts, f, indent=4)
+
+def extract_logs(input_dir, output_path):
+    log_files = sorted([f for f in os.listdir(input_dir) if f.endswith(".log")], key=lambda x: os.path.getmtime(os.path.join(input_dir, x)), reverse=True)
+    with open(output_path, "w") as f:
+        for log_file in log_files[:10]:
+            with open(os.path.join(input_dir, log_file), "r") as lf:
+                f.write(lf.readline())
+
+def create_index(input_dir, output_path):
+    index = {}
+    for root, _, files in os.walk(input_dir):
+        for file in files:
+            if file.endswith(".md"):
+                with open(os.path.join(root, file), "r") as f:
+                    for line in f:
+                        if line.startswith("# "):
+                            index[file] = line[2:].strip()
+                            break
+    with open(output_path, "w") as f:
+        json.dump(index, f, indent=4)
+
+def extract_email(input_path, output_path):
+    with open(input_path, "r") as f:
+        email_content = f.read()
+    # Define the prompt for the LLM
+    prompt = f"Extract the sender's email address from the following email content:\n\n{email_content}"
+    
+    # Send the prompt to the LLM
+    url = "https://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {AIPROXY_TOKEN}"
+    }
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "system",
+                "content": "Extract the sender's email address from the following email content"
+            },
+            {
+                "role": "user",
+                "content": email_content
+            }
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "math_response",
+            "strict": True,
+            "schema":{
+                "type": "object",
+                "properties": {
+                    "sendersEmailAdress": {
+                    "type": "string"
+                    }
+                },
+                "required": ["sendersEmailAdress"],
+                "additionalProperties": False
+                }}
+            }
+            }
+
+    response = requests.post(url=url, headers=headers, json=data)
+    response_json = response.json()
+    email_address_dict = json.loads(response_json['choices'][0]['message']['content'].strip())
+
+    # Extract the email address
+    email_address = email_address_dict['sendersEmailAdress']
+    
+    # Write the extracted email address to the output file
+    with open(output_path, "w") as f:
+        f.write(email_address)
+def extract_credit_card(input_path, output_path):
+    # Assuming LLM is used to extract credit card number
+    with open(input_path, 'rb') as f:
+        binary_data = f.read()
+        image_b64 = base64.b64encode(binary_data).decode()
+
+# Data URI example (embed images in HTML/CSS)
+    data_uri = f"data:image/png;base64,{image_b64}"
+    url = "https://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {AIPROXY_TOKEN}"
+    }
+    data={
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+            "role": "user",
+            "content": [
+                {
+                "type": "text",
+                "text": "Extract the number from the image"
+                },
+                {
+                "type": "image_url",
+                "image_url": {
+                    "url": data_uri
+                }
+                }
+            ]
+            }
+        ]
+        }
+
+    response = requests.post(url=url, headers=headers, json=data)
+    response_json=response.json()
+    content = response_json['choices'][0]['message']['content']
+    number = re.search(r'\*\*(\d{4} \d{4} \d{4} \d{3})\*\*', content).group(1)
+
+    # Remove spaces from the number
+    number = number.replace(' ', '')
+
+    with open(output_path, "w") as f:
+        f.write(number)
+
+async def embed(text: str) -> list[float]:
+    """Get embedding vector for text using OpenAI's API."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.openai.com/v1/embeddings",
+            headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"},
+            json={"model": "text-embedding-3-small", "input": text}
+        )
+        response.raise_for_status()
+        return response.json()["data"][0]["embedding"]
+
+def find_similar_comments(input_location:str, output_location:str):
+    with open(input_location,"r") as f:
+        comments = [i.strip() for i in f.readlines()]
+        f.close()
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    embeddings = model.encode(comments)
+    similarity_mat = cosine_similarity(embeddings)
+    np.fill_diagonal(similarity_mat,0)
+    max_index = int(np.argmax(similarity_mat))
+    i, j = max_index//len(comments), max_index%len(comments)
+    with open(output_location,"w") as g:
+        g.write(comments[i])
+        g.write("\n")
+        g.write(comments[j])
+        g.close()
+    return {"status": "Successfully Created", "output_file destination": output_location}
+
+
+def calculate_sales(input_path, output_path):
+    conn = sqlite3.connect(input_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT SUM(units * price) FROM tickets WHERE LOWER(type) = 'gold'")
+    total_sales = cursor.fetchone()[0]
+    with open(output_path, "w") as f:
+        f.write(str(total_sales))
+    conn.close()
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "run_script",
+            "description": "Install uv and run a script from a URL with provided arguments.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "script_url": {
+                        "type": "string",
+                        "description": "The URL of the script to run."
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "List of arguments to pass to the script."
+                    }
+                },
+                "required": ["script_url", "args"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "format_file",
+            "description": "Format a file using prettier.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The path of the file to format."
+                    }
+                },
+                "required": ["file_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "count_wednesdays",
+            "description": "Count the number of Wednesdays in a file and write the result to another file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The path of the file containing dates."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "The path of the file to write the result."
+                    }
+                },
+                "required": ["file_path", "output_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sort_contacts",
+            "description": "Sort contacts by last name and first name and write the result to another file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input_path": {
+                        "type": "string",
+                        "description": "The path of the file containing contacts."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "The path of the file to write the sorted contacts."
+                    }
+                },
+                "required": ["input_path", "output_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "extract_logs",
+            "description": "Extract the first line of the 10 most recent log files and write to another file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input_dir": {
+                        "type": "string",
+                        "description": "The directory containing log files."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "The path of the file to write the extracted lines."
+                    }
+                },
+                "required": ["input_dir", "output_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_index",
+            "description": "Create an index of Markdown files and their titles.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input_dir": {
+                        "type": "string",
+                        "description": "The directory containing Markdown files."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "The path of the file to write the index."
+                    }
+                },
+                "required": ["input_dir", "output_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "extract_email",
+            "description": "Extract the sender's email address from an email file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input_path": {
+                        "type": "string",
+                        "description": "The path of the file containing the email."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "The path of the file to write the extracted email address."
+                    }
+                },
+                "required": ["input_path", "output_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "extract_credit_card",
+            "description": "Extract the credit card number from an image file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input_path": {
+                        "type": "string",
+                        "description": "The path of the image file containing the credit card number."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "The path of the file to write the extracted credit card number."
+                    }
+                },
+                "required": ["input_path", "output_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_similar_comments",
+            "description": "Find the most similar pair of comments using embeddings.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input_path": {
+                        "type": "string",
+                        "description": "The path of the file containing comments."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "The path of the file to write the similar comments."
+                    }
+                },
+                "required": ["input_path", "output_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate_sales",
+            "description": "Calculate the total sales of Gold tickets from a SQLite database.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input_path": {
+                        "type": "string",
+                        "description": "The path of the SQLite database file."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "The path of the file to write the total sales."
+                    }
+                },
+                "required": ["input_path", "output_path"]
+            }
+        }
+    }
+]
+
+AIPROXY_TOKEN = os.getenv("AIPROXY_TOKEN")
+
+    # Remove the raise statement since we're providing a default token
+
+@app.get("/")
+def home ():
+    return {"Yay TDS is awesome!"}
+
+@app.get("/read")
+def read_file(path: str):
+    try :
+        with open(path, "r") as f:
+            return f.read()
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/run")
+def task_runner(task: str):
+    # Define forbidden patterns (including variations like os . remove, shutil . rmtree)
+    FORBIDDEN_PATTERNS = [
+        r"\bdelete\b", r"\bremove\b", r"\berase\b", r"\bdestroy\b", r"\bdrop\b", r"\brm -rf\b",
+        r"\bunlink\b", r"\brmdir\b", r"\bdel\b", 
+        r"\bos\s*\.\s*remove\b", 
+        r"\bos\s*\.\s*unlink\b", 
+        r"\bshutil\s*\.\s*rmtree\b", 
+        r"\bpathlib\s*\.\s*Path\s*\.\s*unlink\b"
+    ]
+
+    # Check if any forbidden pattern is in the task string
+    for pattern in FORBIDDEN_PATTERNS:
+        if re.search(pattern, task, re.IGNORECASE):
+            raise HTTPException(status_code=400, detail="Task contains forbidden operations (deletion is not allowed).")
+    url = "https://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {AIPROXY_TOKEN}"
+    }
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": task
+            },
+            {
+                "role": "system",
+                "content": """
+You are an assistant who has to perform various tasks based on the user's request.
+You have access to the following tools:
+1. run_script: Install uv and run a script from a URL with provided arguments.
+2. format_file: Format a file using prettier.
+3. count_wednesdays: Count the number of Wednesdays in a file and write the result to another file.
+4. sort_contacts: Sort contacts by last name and first name and write the result to another file.
+5. extract_logs: Extract the first line of the 10 most recent log files and write to another file.
+6. create_index: Create an index of Markdown files and their titles.
+7. extract_email: Extract the sender's email address from an email file.
+8. extract_credit_card: Extract the credit card number from an image file.
+9. find_similar_comments: Find the most similar pair of comments using embeddings.
+10. calculate_sales: Calculate the total sales of Gold tickets from a SQLite database.
+
+Use the appropriate tool based on the task description provided by the user.
+                """
+            }
+        ],
+        "tools": tools,
+        "tool_choice": "auto"
+    }
+
+    
+    response = requests.post(url=url, headers=headers, json=data)
+    response_json = response.json()
+    function_details = response_json['choices'][0]['message']['tool_calls'][0]['function']
+
+    print (function_details)
+    
+    # Execute the function based on the function details
+    function_name = function_details['name']
+    arguments = json.loads(function_details['arguments'])
+    path_keys = ["input_path", "output_path", "input_dir", "file_path"]
+
+    # Check if any path-related key exists and validate it
+    for key in path_keys:
+        if key in arguments:
+            if not arguments[key].startswith("/data"):
+                raise HTTPException(status_code=400, detail=f"Invalid path '{arguments[key]}': Access outside /data is not allowed.")
+    
+    if function_name == "run_script":
+        run_script(arguments['script_url'], arguments['args'][0])
+    elif function_name == "format_file":
+        format_file(arguments['file_path'])
+    elif function_name == "count_wednesdays":
+        count_wednesdays(arguments['file_path'], arguments['output_path'])
+    elif function_name == "sort_contacts":
+        sort_contacts(arguments['input_path'], arguments['output_path'])
+    elif function_name == "extract_logs":
+        extract_logs(arguments['input_dir'], arguments['output_path'])
+    elif function_name == "create_index":
+        create_index(arguments['input_dir'], arguments['output_path'])
+    elif function_name == "extract_email":
+        extract_email(arguments['input_path'], arguments['output_path'])
+    elif function_name == "extract_credit_card":
+        extract_credit_card(arguments['input_path'], arguments['output_path'])
+    elif function_name == "find_similar_comments":
+        find_similar_comments(arguments['input_path'], arguments['output_path'])
+    elif function_name == "calculate_sales":
+        calculate_sales(arguments['input_path'], arguments['output_path'])
+    
+    return function_details
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
