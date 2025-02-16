@@ -1,20 +1,25 @@
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim
 
-# The installer requires curl (and certificates) to download the release archive
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
-
-# Download the latest installer
-ADD https://astral.sh/uv/install.sh /uv-installer.sh
-
-# Run the installer then remove it
-RUN sh /uv-installer.sh && rm /uv-installer.sh
-
-# Ensure the installed binary is on the PATH
-ENV PATH="/root/.local/bin/:$PATH"
-
+# Set working directory to /app
 WORKDIR /app
 
-COPY app.py /app/app.py
+# Copy requirements file
+COPY requirements.txt .
 
+# Create a virtual environment
+RUN python -m venv venv
 
-CMD ["uv", "run", "app.py"]
+# Activate the virtual environment
+ENV PATH="/app/venv/bin:$PATH"
+
+# Install dependencies
+RUN pip install -r requirements.txt
+
+# Copy application code
+COPY app.py .
+
+# Expose port
+EXPOSE 8000
+
+# Run command
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

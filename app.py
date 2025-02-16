@@ -21,8 +21,6 @@ import base64
 import re
 import httpx
 import numpy as np
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 import markdown
 import speech_recognition as sr
 from pydub import AudioSegment
@@ -64,6 +62,8 @@ def parse_date(date_str):
 def count_wednesdays(file_path, output_path):
     with open(file_path, "r") as f:
         dates = f.readlines()
+    day_mapping = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6}
+
     wednesdays = sum(1 for date in dates if parse_date(date.strip()).weekday() == 2)
     with open(output_path, "w") as f:
         f.write(str(wednesdays))
@@ -191,33 +191,55 @@ def extract_credit_card(input_path, output_path):
     with open(output_path, "w") as f:
         f.write(number)
 
-async def embed(text: str) -> list[float]:
-    """Get embedding vector for text using OpenAI's API."""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.openai.com/v1/embeddings",
-            headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"},
-            json={"model": "text-embedding-3-small", "input": text}
-        )
-        response.raise_for_status()
-        return response.json()["data"][0]["embedding"]
+def get_openai_embeddings(texts,model="text-embedding-3-small"):
+    """Fetches embeddings for a list of texts using OpenAI's embedding API in batch mode."""
 
-def find_similar_comments(input_location:str, output_location:str):
-    with open(input_location,"r") as f:
-        comments = [i.strip() for i in f.readlines()]
-        f.close()
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    embeddings = model.encode(comments)
-    similarity_mat = cosine_similarity(embeddings)
-    np.fill_diagonal(similarity_mat,0)
-    max_index = int(np.argmax(similarity_mat))
-    i, j = max_index//len(comments), max_index%len(comments)
-    with open(output_location,"w") as g:
-        g.write(comments[i])
-        g.write("\n")
-        g.write(comments[j])
-        g.close()
-    return {"status": "Successfully Created", "output_file destination": output_location}
+    data = {"input": texts, "model": model}
+    embedding_url = "https://aiproxy.sanand.workers.dev/openai/v1/embeddings"
+    headers = {
+    "Content-Type": "application/json",
+    "Authorization": os.environ.get("AIPROXY_TOKEN"),
+}
+    
+    response = requests.post(url=embedding_url, headers=headers, json=data)
+    print(response.json())
+    if response.status_code == 200:
+        return [item["embedding"] for item in response.json()["data"]]
+    else:
+        raise Exception(f"Error {response.status_code}: {response.text}")
+
+def cosine_similarity_matrix(embeddings):
+    """Computes cosine similarity matrix for a set of embeddings."""
+    embeddings = np.array(embeddings)
+    norm = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    normalized_embeddings = embeddings / norm
+    return np.dot(normalized_embeddings, normalized_embeddings.T)
+
+def find_most_similar_comments(input_path, output_path):
+    """Finds the most similar pair of comments using embeddings and writes them to a file."""
+    with open(input_path, "r") as file:
+        comments = [line.strip() for line in file.readlines() if line.strip()]
+    
+    if len(comments) < 2:
+        raise ValueError("Not enough comments to compare.")
+    
+    # Fetch embeddings in one batch request
+    embeddings = get_openai_embeddings(comments)
+
+    # Compute similarity matrix
+    similarity_matrix = cosine_similarity_matrix(embeddings)
+
+    # Find the most similar pair (excluding diagonal)
+    np.fill_diagonal(similarity_matrix, -1)  # Avoid self-comparison
+    max_index = np.unravel_index(np.argmax(similarity_matrix), similarity_matrix.shape)
+
+    most_similar_pair = (comments[max_index[0]], comments[max_index[1]])
+
+    # Write to output file
+    with open(output_path, "w") as file:
+        file.write(most_similar_pair[0] + "\n")
+        file.write(most_similar_pair[1] + "\n")
+    
 
 
 def calculate_sales(input_path, output_path):
@@ -336,9 +358,24 @@ tools = [
                     "output_path": {
                         "type": "string",
                         "description": "The path of the file to write the result."
-                    }
+                    },
+                    "day_name": {
+                    "type": "string",
+                    "enum": [
+                        "Monday",
+                        "Tuesday",
+                        "Wednesday",
+                        "Thursday",
+                        "Friday",
+                        "Saturday",
+                        "Sunday"
+                    ],
+                    "description": "The name of the day to count."
+                }
+
                 },
-                "required": ["file_path", "output_path"]
+                
+                "required": ["file_path", "output_path","day_name"]
             }
         }
     },
@@ -450,7 +487,7 @@ tools = [
     {
         "type": "function",
         "function": {
-            "name": "find_similar_comments",
+            "name": "find_most_similar_comments",
             "description": "Find the most similar pair of comments using embeddings.",
             "parameters": {
                 "type": "object",
@@ -585,13 +622,13 @@ You are an assistant who has to perform various tasks based on the user's reques
 You have access to the following tools:
 1. run_script: Install uv and run a script from a URL with provided arguments.
 2. format_file: Format a file using prettier.
-3. count_wednesdays: Count the number of Wednesdays in a file and write the result to another file.
+3. count_wednesdays: Count the number of Wednesdays or any week days in a file and write the result to another file.
 4. sort_contacts: Sort contacts by last name and first name and write the result to another file.
 5. extract_logs: Extract the first line of the 10 most recent log files and write to another file.
 6. create_index: Create an index of Markdown files and their titles.
 7. extract_email: Extract the sender's email address from an email file.
 8. extract_credit_card: Extract the credit card number from an image file.
-9. find_similar_comments: Find the most similar pair of comments using embeddings.
+9. find_most_similar_comments: Find the most similar pair of comments using embeddings.
 10. calculate_sales: Calculate the total sales of Gold tickets from a SQLite database.
 11. convert_markdown_file: Convert a Markdown file to HTML and save to the output file.
 12. transcribe_mp3_to_text: Transcribe audio from an MP3 file and save the transcription to the output file.
@@ -627,7 +664,7 @@ Use the appropriate tool based on the task description provided by the user.
     elif function_name == "format_file":
         format_file(arguments['file_path'])
     elif function_name == "count_wednesdays":
-        count_wednesdays(arguments['file_path'], arguments['output_path'])
+        count_wednesdays(arguments['file_path'], arguments['output_path'],arguments['day_name'])
     elif function_name == "sort_contacts":
         sort_contacts(arguments['input_path'], arguments['output_path'])
     elif function_name == "extract_logs":
@@ -638,8 +675,8 @@ Use the appropriate tool based on the task description provided by the user.
         extract_email(arguments['input_path'], arguments['output_path'])
     elif function_name == "extract_credit_card":
         extract_credit_card(arguments['input_path'], arguments['output_path'])
-    elif function_name == "find_similar_comments":
-        find_similar_comments(arguments['input_path'], arguments['output_path'])
+    elif function_name == "find_most_similar_comments":
+        find_most_similar_comments(arguments['input_path'], arguments['output_path'])
     elif function_name == "calculate_sales":
         calculate_sales(arguments['input_path'], arguments['output_path'])
     elif function_name == "convert_markdown_file":
