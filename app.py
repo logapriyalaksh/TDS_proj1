@@ -25,6 +25,10 @@ import markdown
 import speech_recognition as sr
 from pydub import AudioSegment
 import os
+from fastapi.responses import PlainTextResponse
+from bs4 import BeautifulSoup
+import pandas as pd
+import duckdb
 
 app = FastAPI()
 
@@ -198,7 +202,7 @@ def get_openai_embeddings(texts,model="text-embedding-3-small"):
     embedding_url = "https://aiproxy.sanand.workers.dev/openai/v1/embeddings"
     headers = {
     "Content-Type": "application/json",
-    "Authorization": os.environ.get("AIPROXY_TOKEN"),
+    "Authorization": f"Bearer {AIPROXY_TOKEN}",
 }
     
     response = requests.post(url=embedding_url, headers=headers, json=data)
@@ -300,6 +304,67 @@ def transcribe_mp3_to_text(input_path: str, output_path: str):
     
     except Exception as e:
         print(e)
+
+def B3(url, save_path):
+    
+    import requests
+    response = requests.get(url)
+    with open(save_path, 'w') as file:
+        file.write(response.text)
+
+def scrape_webpage(url: str, output_path: str):
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, "html.parser")
+    with open(output_path, "w") as file:
+        file.write(soup.prettify())
+
+
+def run_sql_query(input_path, output_path, query):
+    print(f"Running SQL query: {query}, {input_path}, {output_path}")
+    if not input_path or not query:
+        raise HTTPException(status_code=400, detail="Invalid input parameters: input_path and query are required.")
+    
+    """
+    Runs a SQL query on a SQLite or DuckDB database and saves the result.
+    
+    Parameters:
+        db_path (str): Path to the SQLite (.db) or DuckDB (.duckdb) database file.
+        query (str): SQL query to execute.
+        output_file (str): File to save the results.
+        output_format (str): "csv" or "json" (default: "csv").
+    """
+    # Determine database type (SQLite or DuckDB)
+    is_duckdb = input_path.endswith(".duckdb")
+    
+    if not output_path:
+        output_path = "./data/output_B5.csv"
+    elif output_path.startswith("/"):
+        output_path = f".{output_path}"
+    
+    output_format = "csv" if output_path.endswith(".csv") else "json" if output_path.endswith(".json") else "txt"
+
+    # Connect to the database
+    conn = duckdb.connect(input_path) if is_duckdb else sqlite3.connect(input_path)
+    
+    try:
+        # Execute the query and fetch results into a DataFrame
+        df = pd.read_sql_query(query, conn)
+
+        # Save results
+        if output_format == "json":
+            df.to_json(output_path, orient="records", indent=4)
+        elif output_format == "txt":
+            df.to_csv(output_path, sep="\t", index=False)
+        else:  # Default is CSV
+            df.to_csv(output_path, index=False)
+
+        print(f"Query executed successfully. Results saved to {output_path}")
+        
+        return output_path
+    except Exception as e:
+        print(f"Error executing query: {e}")
+    finally:
+        conn.close()
 
 tools = [
     {
@@ -567,6 +632,73 @@ tools = [
             "required": ["input_path", "output_path"]
         }
     }
+},
+{
+    "type": "function",
+    "function": {
+        "name": "B3",
+        "description": "Fetch data from an API and save it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to fetch data from."
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "The path to save the fetched data."
+                }
+            },
+            "required": ["url", "output_path"]
+        }
+    }
+},
+{
+    "type": "function",
+    "function": {
+        "name": "scrape_webpage",
+        "description": "Extract data from (i.e. scrape) a website and save it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL of the website to scrape."
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "The path to save the scraped data."
+                }
+            },
+            "required": ["url", "output_path"]
+        }
+    }
+},
+{
+    "type": "function",
+    "function": {
+        "name": "run_sql_query",
+        "description": "Run a SQL query on a SQLite or DuckDB database and save the result.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "input_path": {
+                    "type": "string",
+                    "description": "The path of the SQLite or DuckDB database file."
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "The path of the file to save the results."
+                },
+                "query": {
+                    "type": "string",
+                    "description": "The SQL query to execute."
+                }
+            },
+            "required": ["input_path", "output_path", "query"]
+        }
+    }
 }
 ]
 
@@ -580,11 +712,32 @@ def home ():
 
 @app.get("/read")
 def read_file(path: str):
-    try :
-        with open(path, "r") as f:
-            return f.read()
+    """
+    Reads the content of a specified file.
+    - Returns 200 OK if successful.
+    - Returns 404 Not Found if the file does not exist.
+    """
+
+    try:
+        # Ensure the file is inside the /data/ directory
+        if not path.startswith("/data/"):
+            raise HTTPException(status_code=400, detail="Access restricted to /data/ directory.")
+
+        if not os.path.exists(path):
+            raise HTTPException(status_code=404, detail="File not found.")
+
+        # Read file content
+        with open(path, "r", encoding="utf-8") as file:
+            content = file.read().strip()  
+
+        return PlainTextResponse(content)
+
+    except HTTPException as e:
+        raise e 
+
     except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
 
 
 @app.post("/run")
@@ -632,6 +785,9 @@ You have access to the following tools:
 10. calculate_sales: Calculate the total sales of Gold tickets from a SQLite database.
 11. convert_markdown_file: Convert a Markdown file to HTML and save to the output file.
 12. transcribe_mp3_to_text: Transcribe audio from an MP3 file and save the transcription to the output file.
+13. B3: Fetch data from an API and save it.
+14. scrape_webpage: Extract data from (i.e. scrape) a website and save it.
+15. run_sql_query: Run a SQL query on a SQLite or DuckDB database and save the result.
 
 Use the appropriate tool based on the task description provided by the user.
                 """
@@ -683,6 +839,12 @@ Use the appropriate tool based on the task description provided by the user.
         convert_markdown_file(arguments['input_path'], arguments['output_path'])
     elif function_name == "transcribe_mp3_to_text":
         transcribe_mp3_to_text(arguments['input_path'], arguments['output_path'])
+    elif function_name == "B3":
+        B3(arguments['url'], arguments['output_path'])
+    elif function_name == "scrape_webpage":
+        scrape_webpage(arguments['url'], arguments['output_path'])
+    elif function_name == "run_sql_query":
+        run_sql_query(arguments['input_path'], arguments['output_path'], arguments['query'])
     else:
         raise HTTPException(status_code=500, detail=f"Function  not found.")
     
