@@ -59,12 +59,12 @@ def parse_date(date_str):
             continue
     raise ValueError(f"time data '{date_str}' does not match any known format")
 
-def count_wednesdays(file_path, output_path):
+def count_wednesdays(file_path, output_path, day_name):
     with open(file_path, "r") as f:
         dates = f.readlines()
     day_mapping = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6}
 
-    wednesdays = sum(1 for date in dates if parse_date(date.strip()).weekday() == 2)
+    wednesdays = sum(1 for date in dates if parse_date(date.strip()).weekday() == day_mapping[day_name])
     with open(output_path, "w") as f:
         f.write(str(wednesdays))
 
