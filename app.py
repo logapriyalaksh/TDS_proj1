@@ -23,6 +23,10 @@ import httpx
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+import markdown
+import speech_recognition as sr
+from pydub import AudioSegment
+import os
 
 app = FastAPI()
 
@@ -224,6 +228,56 @@ def calculate_sales(input_path, output_path):
     with open(output_path, "w") as f:
         f.write(str(total_sales))
     conn.close()
+
+def convert_markdown_to_html(markdown_content):
+    # Convert Markdown to HTML using the markdown library
+    html_content = markdown.markdown(markdown_content)
+    return html_content
+
+
+# Function to read the input Markdown file, convert it to HTML, and save to the output file
+def convert_markdown_file(input_path, output_path):
+    try:
+        # Read the content from the input Markdown file
+        with open(input_path, 'r') as md_file:
+            markdown_content = md_file.read()
+        
+        # Convert Markdown to HTML
+        html_content = convert_markdown_to_html(markdown_content)
+        
+        # Save the HTML content to the output file
+        with open(output_path, 'w') as html_file:
+            html_file.write(html_content)
+        
+
+    
+    except Exception as e:
+        print (e)
+
+def transcribe_mp3_to_text(input_path: str, output_path: str):
+    try:
+        # Convert MP3 file to WAV format
+        wav_path = '/tmp/temp_audio.wav'  # Temporary location for WAV file
+        audio = AudioSegment.from_mp3(input_path)
+        audio.export(wav_path, format="wav")
+        
+        # Use SpeechRecognition to transcribe the audio
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio_data = recognizer.record(source)
+            transcription = recognizer.recognize_google(audio_data)
+        
+        # Save the transcription to the specified output file
+        with open(output_path, 'w') as f:
+            f.write(transcription)
+        
+        # Clean up the temporary WAV file
+        os.remove(wav_path)
+        
+        print(f"Transcription saved to {output_path}")
+    
+    except Exception as e:
+        print(e)
 
 tools = [
     {
@@ -434,7 +488,49 @@ tools = [
                 "required": ["input_path", "output_path"]
             }
         }
+    },
+    {
+    "type": "function",
+    "function": {
+        "name": "convert_markdown_file",
+        "description": "Convert a Markdown file to HTML and save to the output file.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "input_path": {
+                    "type": "string",
+                    "description": "The path of the input Markdown file."
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "The path of the output HTML file."
+                }
+            },
+            "required": ["input_path", "output_path"]
+        }
     }
+},
+{
+    "type": "function",
+    "function": {
+        "name": "transcribe_mp3_to_text",
+        "description": "Transcribe audio from an MP3 file and save the transcription to the output file.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "input_path": {
+                    "type": "string",
+                    "description": "The path of the input MP3 file."
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "The path of the output transcription file."
+                }
+            },
+            "required": ["input_path", "output_path"]
+        }
+    }
+}
 ]
 
 AIPROXY_TOKEN = os.getenv("AIPROXY_TOKEN")
@@ -497,6 +593,8 @@ You have access to the following tools:
 8. extract_credit_card: Extract the credit card number from an image file.
 9. find_similar_comments: Find the most similar pair of comments using embeddings.
 10. calculate_sales: Calculate the total sales of Gold tickets from a SQLite database.
+11. convert_markdown_file: Convert a Markdown file to HTML and save to the output file.
+12. transcribe_mp3_to_text: Transcribe audio from an MP3 file and save the transcription to the output file.
 
 Use the appropriate tool based on the task description provided by the user.
                 """
@@ -544,6 +642,12 @@ Use the appropriate tool based on the task description provided by the user.
         find_similar_comments(arguments['input_path'], arguments['output_path'])
     elif function_name == "calculate_sales":
         calculate_sales(arguments['input_path'], arguments['output_path'])
+    elif function_name == "convert_markdown_file":
+        convert_markdown_file(arguments['input_path'], arguments['output_path'])
+    elif function_name == "transcribe_mp3_to_text":
+        transcribe_mp3_to_text(arguments['input_path'], arguments['output_path'])
+    else:
+        raise HTTPException(status_code=500, detail=f"Function  not found.")
     
     return function_details
 
