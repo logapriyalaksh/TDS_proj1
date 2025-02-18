@@ -721,8 +721,6 @@ tools = [
 ]
 
 AIPROXY_TOKEN = os.getenv("AIPROXY_TOKEN")
-if not AIPROXY_TOKEN:
-    AIPROXY_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6ImxvZ2Fwcml5YS5zYW1wYXRoQHN0cmFpdmUuY29tIn0.d30hEyGe06GhwkFVXknW3fWathT2QSr5vG3dirTU-Gw"
 
 
     # Remove the raise statement since we're providing a default token
@@ -873,4 +871,4 @@ Use the appropriate tool based on the task description provided by the user.
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, port=8000)
+    uvicorn.run(app,host="0.0.0.0", port=8000)
