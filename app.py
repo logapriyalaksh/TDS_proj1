@@ -50,11 +50,14 @@ def run_script(script_url, email):
     command = f"uv run {script_url} {email}"
     subprocess.run(command, shell=True)
 
-def format_file(file_path):
-    app_dir = os.path.dirname(os.path.abspath(__file__))
-    os.chdir(app_dir)
-    subprocess.run(["npx", "prettier@3.4.2", "--write", file_path])
-
+def format_file(filename):
+    prettier_version="prettier@3.4.2",
+    command = ["/usr/bin/npx", prettier_version, "--write", filename]
+    try:
+        subprocess.run(command, check=True)
+        print("Prettier executed successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"An error occurred: {e}")
 def parse_date(date_str):
     for fmt in ("%b %d, %Y", "%d-%b-%Y", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S"):
         try:
@@ -171,7 +174,7 @@ def extract_credit_card(input_path, output_path):
             "content": [
                 {
                 "type": "text",
-                "text": "Extract the number from the image"
+                "text": "There is 8 or more digit number is there in this image, with space after every 4 digit, only extract the those digit number without spaces and return just the number without any other characters"
                 },
                 {
                 "type": "image_url",
@@ -181,19 +184,34 @@ def extract_credit_card(input_path, output_path):
                 }
             ]
             }
-        ]
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "math_response",
+            "strict": True,
+            "schema":{
+                "type": "object",
+                "properties": {
+                    "IDnumber": {
+                    "type": "string"
+                    }
+                },
+                "required": ["IDnumber"],
+                "additionalProperties": False
+                }}
+            }
         }
 
     response = requests.post(url=url, headers=headers, json=data)
     response_json=response.json()
-    content = response_json['choices'][0]['message']['content']
-    number = re.search(r'\*\*(\d{4} \d{4} \d{4} \d{3})\*\*', content).group(1)
+    content = json.loads(response_json['choices'][0]['message']['content'])
+    # number = re.search(r'\*\*(\d{4} \d{4} \d{4} \d{3})\*\*', content).group(1)
 
-    # Remove spaces from the number
-    number = number.replace(' ', '')
+    # # Remove spaces from the number
+    # number = number.replace(' ', '')
 
     with open(output_path, "w") as f:
-        f.write(number)
+        f.write(content['IDnumber'])
 
 def get_openai_embeddings(texts,model="text-embedding-3-small"):
     """Fetches embeddings for a list of texts using OpenAI's embedding API in batch mode."""
@@ -703,6 +721,9 @@ tools = [
 ]
 
 AIPROXY_TOKEN = os.getenv("AIPROXY_TOKEN")
+if not AIPROXY_TOKEN:
+    AIPROXY_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6ImxvZ2Fwcml5YS5zYW1wYXRoQHN0cmFpdmUuY29tIn0.d30hEyGe06GhwkFVXknW3fWathT2QSr5vG3dirTU-Gw"
+
 
     # Remove the raise statement since we're providing a default token
 
@@ -852,4 +873,4 @@ Use the appropriate tool based on the task description provided by the user.
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, port=8000)
